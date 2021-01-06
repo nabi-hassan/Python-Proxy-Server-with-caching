@@ -14,8 +14,8 @@ Getting Started
 	
 Project Description: 
 
-	Web proxy caching stores copies of frequently accessed Web objects (such as web pages) close to users and serves this information to them. 
-	Internet users get their information faster, and Internet bandwidth is freed for other tasks.
+	Web proxy caching stores copies of frequently accessed Web objects (such as web pages) close to users and serves this information
+	to them. Internet users get their information faster, and Internet bandwidth is freed for other tasks.
 	At the very simplest level, a cache server is responsible for serving items that have already been requested from the main server. 
 	Doing this gives the main server a break from having to respond to every request, and the workload can be shared by the cache server.
 
