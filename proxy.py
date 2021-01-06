@@ -4,7 +4,8 @@ import threading
 import ssl
 import pickle # file format for saving cache dict
 import atexit # used to save cache before program exit
-import time
+import time, datetime
+import re
 
 BUFFER_LENGTH = 1048576 # buffer size = 2^20
 cacheDict = {}
@@ -21,7 +22,6 @@ def readDict(): # reads the cache saved from last session in cache.pkl
 
 def exit_handler(): # on ctrl+C save cache
   saveDict()
-  print("Cache saved")
 
 def readBlocked(): # lists what urls have been blocked
   listBlocked = open("blocked.txt").read()
@@ -40,12 +40,7 @@ def removeBlocked(blocked): # unblocks a url
       f.write(str(line + "\n"))
   f.close
 
-def isBlocked(blocked): # checks if a url is blocked
-  lines = open("blocked.txt").read().splitlines()
-  for line in lines:
-    if (str(line) in (blocked)):
-      return True
-  return False
+
 
 def inputLoop(): # prompts the user asking them if they would like to start the proxy, edit the blocked urls list or clear the cache
   while True:
@@ -76,16 +71,36 @@ def main(): # begins by reading the saved cache and beginning user input prompt
 
 
 class Server: # Server class handles web socket connections
-  def __init__(self, port): 
+  def __init__(self, port):
     self.serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # socket creation
     self.serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     self.serverSocket.bind(('', port)) # bind localhost and port provided with our new socket
     self.serverSocket.listen(10) # queue up as many as 10 connect requests before refusing more
     while True:
-      (proxySocket, proxy_address) = self.serverSocket.accept()
-      threadListener = threading.Thread(target = self.requestReceived, args=(proxySocket, proxy_address)) # ready to create a new thread for any request made and run requestReceived
+      (webClient, proxy_address) = self.serverSocket.accept()
+      threadListener = threading.Thread(target = self.requestReceived, args=(webClient, proxy_address)) # ready to create a new thread for any request made and run requestReceived
       threadListener.setDaemon(True)
       threadListener.start()
+  def write_log(self, msg):
+    with open("log/log.txt", "a+") as file:
+      file.write(msg)
+      file.write("\n")
+
+
+  def isBlocked(self, blocked): # checks if a url is blocked
+    target = str(blocked)
+    Blocked = open("blocked.txt").read()
+    Blocked = str(Blocked)
+    if (target in Blocked):
+      print(self.getTimeStampp() + "   Website Blacklisted")
+      self.write_log(self.getTimeStampp() + "   Website Blacklisted")
+      return True
+    else:
+      return False
+
+
+  def getTimeStampp(self):
+    return "[" + str(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')) + "]"
 
   def getPort(self, request, url): # gets the port from a websocket request
     http_pos = url.find("://")
@@ -99,10 +114,10 @@ class Server: # Server class handles web socket connections
         webserver_pos = len(temp)
     webserver = ""
     port = -1
-    if (port_pos==-1 or webserver_pos < port_pos): 
+    if (port_pos==-1 or webserver_pos < port_pos):
 
-        port = 80 
-        webserver = temp[:webserver_pos] 
+        port = 80
+        webserver = temp[:webserver_pos]
     else:
         port = int((temp[(port_pos+1):])[:webserver_pos-port_pos-1])
         webserver = temp[:port_pos]
@@ -126,110 +141,142 @@ class Server: # Server class handles web socket connections
         webserver_pos = len(temp)
     webserver = ""
     port = -1
-    if (port_pos==-1 or webserver_pos < port_pos): 
+    if (port_pos==-1 or webserver_pos < port_pos):
 
-        port = 80 
-        webserver = temp[:webserver_pos] 
+        port = 80
+        webserver = temp[:webserver_pos]
     else:
         port = int((temp[(port_pos+1):])[:webserver_pos-port_pos-1])
         webserver = temp[:port_pos]
     return webserver
-  def gethttp(self, request, proxySocket, proxy_address, port, webserver):
-    start = time.time() # start timer to see how long request takes to process without cache access
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-    s.connect((webserver, port))
-    s.sendall(request) # send request to server
-        
-    while 1:
-      data = s.recv(BUFFER_LENGTH) # receive data from server
-      cacheDict[request] = data # save request in cache
-      if (len(data) > 0):
-          proxySocket.sendall(data) # send data to browser
-      else:
-          break
-      break
-    end = time.time() # end timer
-    timeElapsed = (end - start) * 1000
-    print("Request completed in " + str(timeElapsed) + "ms")
-    s.close()
-    proxySocket.close()
 
-  def gethttps(self, request, proxySocket, proxy_address, port, webserver):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+  def requestReceived(self, webClient, proxy_address):
     try:
-      # If successful, send 200 code response
-      s.connect((webserver, port))
-      reply = "HTTP/1.0 200 Connection established\r\n"
-      reply += "Proxy-agent: Jarvis\r\n"
-      reply += "\r\n"
-      proxySocket.sendall(reply.encode())
-    except socket.error as err:
-      pass
-
-    proxySocket.setblocking(0)
-    s.setblocking(0)
-    print("  HTTPS Connection Established")
-    while True:
-        try:
-            request = proxySocket.recv(BUFFER_LENGTH)
-            s.sendall(request)
-        except socket.error as err:
-            pass
-
-        try:
-            reply = s.recv(BUFFER_LENGTH)
-            cacheDict[request] = reply
-            x = saveDict()
-            proxySocket.sendall(reply)
-            
-        except socket.error as e:
-            pass
-  
-
-  '''
-  This method handles a websocket request. It checks to see if the url is blocked. If it is it ends the request without sending data to the browser.
-  If the url isn't blocked, it checks if the request is already in the cache. If it is it sends the data from the cache to the user.
-  If the request is neither blocked nor in the cache, this method sends the request to the webserver, receives the data, passes the data to the browser and 
-  saves the data in the cache.
-  '''
-  def requestReceived(self, proxySocket, proxy_address):
-    print()
-    try:
-      request = proxySocket.recv(BUFFER_LENGTH) # receive request
+      self.write_log(self.getTimeStampp() + "   \n\nStarting Server\n\n")
+      request = webClient.recv(BUFFER_LENGTH) # receive request
       if (str(request).split('\n')[0] == "b''"): # check if request is empty and do nothing if it is
       	print("Empty request")
-      	proxySocket.close()
+      	webClient.close()
       	return
       url = self.getUrl(request) # find url
       webserver = self.getWebserver(request, url) # find webserver
       port = self.getPort(request, url) # find port
       print("Request for website: " + url + " at Port: " + str(port))
-      if (isBlocked(url)):
+      if (self.isBlocked(webserver)):
         print("Url is blocked")
-        proxySocket.close() # if website is on the blocked list then close socket
-        
-      elif (request in cacheDict):
-        print("Cache hit, fetching from cache")
-        start = time.time() # begin timing how long cache access takes
-        data = cacheDict[request] # get request from cache
-        while 1:
-          if (len(data) > 0):
-              proxySocket.send(data) # send data to browser
-          else:
-              break
-          break
-        end = time.time() # end timer
-        timeElapsed = (end - start) * 1000
-        print("Request for " + webserver + " handled from cache in " + str(timeElapsed) + "ms") 
-        proxySocket.close()
+        webClient.close() # if website is on the blocked list then close socket
+
       else:
         method = request.split(b" ")[0]
         if method == b"CONNECT":
-          self.gethttps(request, proxySocket, proxy_address, port, webserver)
-        else:
-          self.gethttp(request, proxySocket, proxy_address, port, webserver)
+          s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          try:
+            start = time.time() # begin timing how long cache access takes
+            self.write_log(self.getTimeStampp() + "  Cache Hit " + str(url) + "\n")
+            data = cacheDict[request] # get request from cache
+            reply = "HTTP/1.0 200 Connection established\r\n"
+            reply += "\r\n"
+            webClient.sendall(reply.encode())
+            webClient.setblocking(0)
+            s.setblocking(0)
+            print("\n\nCache hit, fetching from cache\n\n")
+            while True:
+                try:
+                    s.sendall(data)
+                except socket.error as err:
+                    pass
 
-        
+                try:
+                    reply = s.recv(BUFFER_LENGTH)
+                    cacheDict[request] = reply
+                    webClient.sendall(reply)
+
+                except socket.error as e:
+                    pass
+            end = time.time() # end timer
+            timeElapsed = (end - start) * 1000
+            print("Request for " + webserver + " handled from cache in " + str(timeElapsed) + "ms")
+            webClient.close()
+
+          except:
+            try:
+              # If successful, send 200 code response
+              self.write_log(self.getTimeStampp() + " Not in Cache, showing from main server " + str(url) + "\n")
+              s.connect((webserver, port))
+              reply = "HTTP/1.0 200 Connection established\r\n"
+              reply += "\r\n"
+              webClient.sendall(reply.encode())
+            except socket.error as err:
+              pass
+
+            webClient.setblocking(0)
+            s.setblocking(0)
+            print("  HTTPS Connection Established")
+            print(" Not in Cache, showing from main server ")
+            while True:
+                try:
+                    request = webClient.recv(BUFFER_LENGTH)
+                    s.sendall(request)
+                except socket.error as err:
+                    pass
+
+                try:
+                    reply = s.recv(BUFFER_LENGTH)
+                    cacheDict[request] = reply
+                    webClient.sendall(reply)
+
+                except socket.error as e:
+                    pass
+            end = time.time() # end timer
+            timeElapsed = (end - start) * 1000
+            print("Request completed in " + str(timeElapsed) + "ms")
+            exit_handler()
+            s.close()
+            webClient.close()
+        else:
+          if (str(request).split('\n')[0] == "b''"): # check if request is empty and do nothing if it is
+            print("Empty request")
+            webClient.close()
+            return
+          url = self.getUrl(request) # find url
+          webserver = self.getWebserver(request, url) # find webserver
+          port = self.getPort(request, url) # find port
+          print("Request for website: " + url + " at Port: " + str(port))
+          if (request in cacheDict):
+            print("Cache hit, fetching from cache")
+            start = time.time() # begin timing how long cache access takes
+            data = cacheDict[request] # get request from cache
+            while 1:
+              if (len(data) > 0):
+                  webClient.send(data) # send data to browser
+              else:
+                  break
+              break
+            end = time.time() # end timer
+            timeElapsed = (end - start) * 1000
+            print("Request for " + webserver + " handled from cache in " + str(timeElapsed) + "ms") 
+            webClient.close()
+          else:
+            start = time.time() # start timer to see how long request takes to process without cache access
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+            s.connect((webserver, port))
+            s.send(request) # send request to server
+            while 1:
+              data = s.recv(BUFFER_LENGTH) # receive data from server
+              cacheDict[request] = data # save request in cache
+              if (len(data) > 0):
+                  webClient.send(data) # send data to browser
+              else:
+                  break
+              break
+            end = time.time() # end timer
+            timeElapsed = (end - start) * 1000
+            print("Request completed in " + str(timeElapsed) + "ms")
+            exit_handler()
+            s.close()
+            webClient.close()
+
     except OSError:
       #print("Socket Error")
       pass
